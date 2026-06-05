@@ -1,6 +1,7 @@
 import os
 import requests
 import re
+import asyncio
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -58,7 +59,6 @@ def get_ocbc_fd_rates_text():
         for table in tables:
             rows = table.find_all('tr')
             for row in rows:
-                # Extract individual columns instead of mashing them together immediately
                 cols = row.find_all(['td', 'th'])
                 if not cols:
                     continue
@@ -69,7 +69,6 @@ def get_ocbc_fd_rates_text():
                 if 'Singapore Dollar' in full_text and '%' in full_text:
                     found_rates = True
 
-                    # Try to parse the columns neatly (Currency, Tenor, Method, Rate, Min Amt)
                     if len(col_texts) >= 5 and 'Singapore Dollar' in col_texts[0]:
                         tenor = col_texts[1]
                         method = col_texts[2]
@@ -77,9 +76,7 @@ def get_ocbc_fd_rates_text():
                         min_amt = col_texts[4]
                         rates_text += f"🔹 *{tenor} Months* ({method}): *{rate}* (Min {min_amt})\n"
                     else:
-                        # Fallback for weirdly shaped tables
                         clean_text = re.sub(r'\s+', ' ', full_text).replace('Singapore Dollar', '').strip()
-                        # Add the word 'Months' after the first number
                         clean_text = re.sub(r'^(\d+)', r'\1 Months -', clean_text)
                         rates_text += f"👉 {clean_text}\n"
 
@@ -111,14 +108,12 @@ async def ocbc_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🌐 Scraping live OCBC rates... Please hold.")
     rates_msg = get_ocbc_fd_rates_text()
 
-    # If the scraper failed, just send the error and stop
     if "❌ OCBC Connection failed" in rates_msg:
         await update.message.reply_text(rates_msg, parse_mode="Markdown")
         return
 
     await update.message.reply_text("🧠 Analyzing the best rate against live macroeconomic data from the internet...")
 
-    # Initialize Gemini
     gemini_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=gemini_key)
 
@@ -135,26 +130,42 @@ async def ocbc_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     
     FORMATTING:
     Use clean Markdown. Keep it punchy, professional, and data-driven.
+    CRITICAL: Your entire response MUST be concise and under 3000 characters.
     """
 
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents="Analyze these OCBC rates and search the web for current SG macroeconomic conditions to give me a recommendation.",
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.3,
-                # THIS ENABLES LIVE INTERNET ACCESS FOR GEMINI
-                tools=[{"google_search": {}}]
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents="Analyze these OCBC rates and search the web for current SG macroeconomic conditions to give me a recommendation.",
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.3,
+                    tools=[{"google_search": {}}]
+                )
             )
-        )
 
-        # Combine the raw rates with the AI's smart analysis
-        final_message = f"{rates_msg}\n\n{'='*30}\n\n*🤖 AI Financial Analysis:*\n{response.text}"
-        await update.message.reply_text(final_message, parse_mode="Markdown")
+            final_message = f"{rates_msg}\n\n{'='*30}\n\n*🤖 AI Financial Analysis:*\n{response.text}"
 
-    except Exception as e:
-        await update.message.reply_text(f"{rates_msg}\n\n⚠️ Could not complete AI analysis: {e}", parse_mode="Markdown")
+            # TELEGRAM FIX: Safely chunk messages that exceed the 4096 character limit
+            if len(final_message) > 4000:
+                chunks = [final_message[i:i+4000] for i in range(0, len(final_message), 4000)]
+                for chunk in chunks:
+                    # We drop parse_mode="Markdown" on chunks to prevent broken formatting errors if a tag is sliced in half
+                    await update.message.reply_text(chunk)
+            else:
+                await update.message.reply_text(final_message, parse_mode="Markdown")
+            break
+
+        except Exception as e:
+            error_msg = str(e)
+            if "503" in error_msg and attempt < max_retries - 1:
+                await update.message.reply_text(f"⏳ Google AI is currently experiencing high demand. Retrying in 3 seconds... (Attempt {attempt + 2}/{max_retries})")
+                await asyncio.sleep(3)
+            else:
+                await update.message.reply_text(f"{rates_msg}\n\n⚠️ Could not complete AI analysis after {max_retries} attempts. Details: {error_msg}", parse_mode="Markdown")
+                break
 
 async def handle_mortgage_calculation(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -216,7 +227,7 @@ if __name__ == "__main__":
     application = ApplicationBuilder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("ocbc", ocbc_command))  # New OCBC Command Route!
+    application.add_handler(CommandHandler("ocbc", ocbc_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_mortgage_calculation))
 
     print(f"Starting webhook on port {PORT} via endpoint {RENDER_URL}/{TOKEN}")
