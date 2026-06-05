@@ -32,7 +32,8 @@ def get_latest_sora_rates():
             "sora_daily": float(latest.get("sora", 0.0)),
             "sora_3m": float(latest.get("sora_comp_3m", 0.0))
         }
-    except Exception:
+    except Exception as e:
+        print(f"SORA Fetch Error: {e}")
         return {"date": "Fallback Baseline (Recent)", "sora_daily": 3.45, "sora_3m": 3.55}
 
 # ==========================================
@@ -57,11 +58,30 @@ def get_ocbc_fd_rates_text():
         for table in tables:
             rows = table.find_all('tr')
             for row in rows:
-                text = row.get_text(separator=' ', strip=True)
-                if 'Singapore Dollar' in text and '%' in text:
+                # Extract individual columns instead of mashing them together immediately
+                cols = row.find_all(['td', 'th'])
+                if not cols:
+                    continue
+
+                col_texts = [c.get_text(separator=' ', strip=True) for c in cols]
+                full_text = ' '.join(col_texts)
+
+                if 'Singapore Dollar' in full_text and '%' in full_text:
                     found_rates = True
-                    clean_text = re.sub(r'\s+', ' ', text)
-                    rates_text += f"👉 {clean_text}\n"
+
+                    # Try to parse the columns neatly (Currency, Tenor, Method, Rate, Min Amt)
+                    if len(col_texts) >= 5 and 'Singapore Dollar' in col_texts[0]:
+                        tenor = col_texts[1]
+                        method = col_texts[2]
+                        rate = col_texts[3]
+                        min_amt = col_texts[4]
+                        rates_text += f"🔹 *{tenor} Months* ({method}): *{rate}* (Min {min_amt})\n"
+                    else:
+                        # Fallback for weirdly shaped tables
+                        clean_text = re.sub(r'\s+', ' ', full_text).replace('Singapore Dollar', '').strip()
+                        # Add the word 'Months' after the first number
+                        clean_text = re.sub(r'^(\d+)', r'\1 Months -', clean_text)
+                        rates_text += f"👉 {clean_text}\n"
 
         if not found_rates:
             rates_text += "⚠️ *Format Changed.* Could not locate exact rate table.\nFallback: 12-Month Online: 1.10% | 18-Month Online: 1.15%"
@@ -73,7 +93,7 @@ def get_ocbc_fd_rates_text():
 # ==========================================
 # 3. TELEGRAM COMMAND HANDLERS
 # ==========================================
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "🇸🇬 *Welcome to the SG Finance Super Bot!*\n\n"
         "I can help you with two things today:\n\n"
@@ -87,12 +107,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
 
-async def ocbc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ocbc_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🌐 Connecting to OCBC servers... Please hold.")
     rates_msg = get_ocbc_fd_rates_text()
     await update.message.reply_text(rates_msg, parse_mode="Markdown")
 
-async def handle_mortgage_calculation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_mortgage_calculation(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     await update.message.reply_text("🔄 Fetching live MAS SORA data and calculating... Please hold.")
 
@@ -106,7 +126,8 @@ async def handle_mortgage_calculation(update: Update, context: ContextTypes.DEFA
                 fixed_rate = float(line.lower().replace('fixed:', '').replace('%', '').strip())
             if 'spread:' in line.lower():
                 current_spread = float(line.lower().replace('spread:', '').replace('%', '').strip())
-    except Exception:
+    except Exception as e:
+        print(f"Parsing error: {e}")
         await update.message.reply_text("⚠️ Could not parse text perfectly. Using default configuration baseline.")
 
     sora_data = get_latest_sora_rates()
