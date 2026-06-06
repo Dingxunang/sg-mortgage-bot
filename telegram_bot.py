@@ -39,7 +39,6 @@ def get_latest_sora_rates():
 # 2. TELEGRAM COMMAND HANDLERS
 # ==========================================
 async def start_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
-    # UPDATED: Changed instructions to point to /bank
     welcome_text = (
         "🇸🇬 *Welcome to the SG Finance Super Bot!*\n\n"
         "I can help you with two things today:\n\n"
@@ -53,25 +52,35 @@ async def start_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
 
-# UPDATED: Renamed from fd_command to bank_command
 async def bank_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🌐 Initiating live web scan of all major SG bank Fixed Deposit rates... Please hold.")
+    await update.message.reply_text("🌐 Scanning major SG banks for live promo rates... Please hold.")
 
     gemini_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=gemini_key)
 
+    # UI IMPROVEMENT: Swapped out wide tables for custom clean vertical layouts
     system_prompt = """
     You are an elite Singapore Wealth Management Advisor. 
     
     ROLE ACTIONS:
-    1. Use Google Search to find the LATEST promotional Fixed Deposit (FD) interest rates across major Singapore banks (DBS, UOB, OCBC, CIMB, RHB, Hong Leong, etc.).
-    2. Create a concise Markdown Table comparing the best rates, their required tenure (e.g., 3, 6, 12 months), and minimum deposit amounts. Keep the table very compact.
-    3. Briefly compare the best FD rate against current alternatives like SG 6-month T-Bills or SSB (Singapore Savings Bonds).
-    4. Conclude with a definitive 1-sentence verdict on where to park cash right now.
+    1. Use Google Search to find the LATEST promotional Fixed Deposit (FD) interest rates across major Singapore banks (DBS, UOB, OCBC, CIMB, RHB, Hong Leong, Maybank, etc.).
+    2. Format the response beautifully for a MOBILE screen using clear vertical visual hierarchies rather than wide markdown tables (which wrap awkwardly and become unreadable on phone screens).
+    
+    For each major bank tier found, layout the details cleanly like this:
+    
+    🏦 *[BANK NAME]*
+    ▪️ *Highest Rate:* [X.XX]% p.a.
+    ▪️ *Tenure:* [X] Months
+    ▪️ *Min Deposit:* SGD [Amount]
+    ▪️ *Requirement:* [e.g., Online booking, Fresh funds only]
+    ---
+    
+    3. Provide a brief, clean section comparing these rates against sovereign alternatives like the latest Singapore 6-month T-Bills or SSB (Singapore Savings Bonds).
+    4. Conclude with a definitive, prominent 1-sentence financial recommendation on where to lock cash right now.
     
     FORMATTING CONSTRAINTS (CRITICAL):
     - Telegram has a strict 4096 character limit. Your ENTIRE response MUST be under 3000 characters.
-    - Use clean, standard Markdown. Do not use overly complex formatting that might break the parser.
+    - Use standard bold, italic, and bullet points. Do not use complex tables or headers that break mobile screens.
     """
 
     max_retries = 3
@@ -79,15 +88,15 @@ async def bank_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
         try:
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
-                contents="Search the internet for today's SG bank fixed deposit promotional rates and compare them.",
+                contents="Search the web for today's SG bank fixed deposit promotional rates and present a clean comparison layout.",
                 config=genai.types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    temperature=0.2,
+                    temperature=0.1,
                     tools=[{"google_search": {}}]
                 )
             )
 
-            final_message = f"🏦 *SG Banks Fixed Deposit Comparison*\n\n{response.text}"
+            final_message = f"📊 *LATEST SG FIXED DEPOSIT RATES*\n\n{response.text}"
 
             if len(final_message) > 4000:
                 chunks = [final_message[i:i+4000] for i in range(0, len(final_message), 4000)]
@@ -104,7 +113,7 @@ async def bank_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             error_msg = str(e)
             if "503" in error_msg and attempt < max_retries - 1:
-                await update.message.reply_text(f"⏳ Google AI is currently experiencing high demand. Retrying in 3 seconds... (Attempt {attempt + 2}/{max_retries})")
+                await update.message.reply_text(f"⏳ System busy. Retrying in 3 seconds... (Attempt {attempt + 2}/{max_retries})")
                 await asyncio.sleep(3)
             else:
                 await update.message.reply_text(f"⚠️ Could not complete AI market scan after {max_retries} attempts. Details: {error_msg}")
@@ -144,11 +153,8 @@ async def handle_mortgage_calculation(update: Update, _context: ContextTypes.DEF
 
     ROLE ACTIONS:
     1. Compare the user's fixed rate vs floating rate options mathematically.
-    2. Output a Markdown Table formatting all monetary values in SGD.
+    2. Format cleanly using clear vertical sections rather than wide tables. Use bold text for numbers.
     3. Conclude with a definitive 2-year horizon risk recommendation.
-    
-    FORMATTING:
-    Keep the total response concise, ensuring it easily fits within a Telegram message.
     """
     user_query = f"Loan amount: SGD {loan_amount:,.2f}. Fixed rate offered: {fixed_rate}%. Floating alternative: 3M SORA + {current_spread}%. Which is better based on today's SORA?"
 
@@ -173,7 +179,6 @@ if __name__ == "__main__":
     application = ApplicationBuilder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
-    # UPDATED: Registers "bank" as the active trigger command
     application.add_handler(CommandHandler("bank", bank_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_mortgage_calculation))
 
