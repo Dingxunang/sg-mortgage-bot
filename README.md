@@ -1,4 +1,4 @@
-# SG Mortgage Refinance & Finance AI Agent
+# SG Finance Super Bot
 
 A Telegram-based AI agent designed to help Singaporean homeowners objectively evaluate private home mortgage refinancing options and scan for the best savings alternatives. It fetches live SORA (Singapore Overnight Rate Average) benchmark data from the Monetary Authority of Singapore (MAS), scans live promotional banking rates across major institutions, and uses Google's Gemini AI to generate a mathematical comparison and risk-adjusted financial recommendations.
 
